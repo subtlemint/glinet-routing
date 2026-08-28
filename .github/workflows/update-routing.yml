@@ -2,6 +2,9 @@ name: Update GL.iNet routing list
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/update-routing.yml"
   schedule:
     - cron: "30 0 * * *"
       timezone: "Asia/Seoul"
