@@ -1,0 +1,3 @@
+# Add one domain, IP address, or CIDR per line.
+# Blank lines, duplicate entries, and comments are ignored.
+
