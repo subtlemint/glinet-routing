@@ -1,0 +1,116 @@
+name: Update GL.iNet routing list
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 0 * * *"
+      timezone: "Asia/Seoul"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-glinet-routing-list
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Download, validate, and merge lists
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export LC_ALL=C
+
+          readonly KR_URL="https://www.ipdeny.com/ipblocks/data/aggregated/kr-aggregated.zone"
+          readonly NETFLIX_URL="https://openconnect.netflix.com/mobiledeliverydomains.txt"
+          readonly TEMP_DIR="$(mktemp -d)"
+          trap 'rm -rf "$TEMP_DIR"' EXIT
+
+          download() {
+            local url="$1"
+            local destination="$2"
+
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --location \
+              --retry 3 \
+              --retry-delay 5 \
+              --connect-timeout 20 \
+              --max-time 120 \
+              --output "$destination" \
+              "$url"
+          }
+
+          clean_list() {
+            local source_file="$1"
+            local destination="$2"
+
+            awk '
+              {
+                sub(/\r$/, "")
+                sub(/[[:space:]]*#.*/, "")
+                gsub(/^[[:space:]]+/, "")
+                gsub(/[[:space:]]+$/, "")
+              }
+              length($0) > 0 { print }
+            ' "$source_file" | sort -u > "$destination"
+          }
+
+          download "$KR_URL" "$TEMP_DIR/kr.download"
+          download "$NETFLIX_URL" "$TEMP_DIR/netflix.download"
+
+          clean_list "$TEMP_DIR/kr.download" "$TEMP_DIR/kr.txt"
+          clean_list "$TEMP_DIR/netflix.download" "$TEMP_DIR/netflix.txt"
+          clean_list extra.txt "$TEMP_DIR/extra.txt"
+
+          kr_count="$(wc -l < "$TEMP_DIR/kr.txt")"
+          netflix_count="$(wc -l < "$TEMP_DIR/netflix.txt")"
+
+          if (( kr_count < 500 )); then
+            echo "KR list validation failed: expected at least 500 entries, got $kr_count." >&2
+            exit 1
+          fi
+
+          if (( netflix_count < 5 )); then
+            echo "Netflix list validation failed: expected at least 5 entries, got $netflix_count." >&2
+            exit 1
+          fi
+
+          cat \
+            "$TEMP_DIR/kr.txt" \
+            "$TEMP_DIR/netflix.txt" \
+            "$TEMP_DIR/extra.txt" \
+            | sort -u > "$TEMP_DIR/routing.txt"
+
+          if cmp -s "$TEMP_DIR/routing.txt" routing.txt; then
+            echo "routing.txt is already up to date."
+            exit 0
+          fi
+
+          mv "$TEMP_DIR/routing.txt" routing.txt
+
+      - name: Commit and push changes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          git add routing.txt
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update routing list"
+          git push
+
